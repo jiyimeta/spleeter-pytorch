@@ -10,18 +10,27 @@
 import argparse
 import coremltools as ct
 import torch
+from coremltools.models import MLModel
 
 from pathlib import Path
 from spleeter_pytorch.estimator import Estimator
 
 ROOT = Path(__file__).resolve().parent
 
+
 def main():
-    parser = argparse.ArgumentParser(description='Converts Spleeter (minus the STFT preprocessing) to Core ML')
+    parser = argparse.ArgumentParser(
+        description='Converts Spleeter (minus the STFT preprocessing) to Core ML')
     parser.add_argument('-n', '--num-instruments', type=int, default=2, help='The number of stems.')
-    parser.add_argument('-m', '--model', type=Path, default=ROOT / 'checkpoints' / '2stems' / 'model', help='The path to the model to use.')
-    parser.add_argument('-o', '--output', type=Path, default=ROOT / 'output' / 'coreml', help='The output directory to place the model in')
-    parser.add_argument('-l', '--length', type=float, default=5.0, help='The input length in seconds for the converted Core ML model (which will only take fixed-length inputs). Default: 5 seconds')
+    parser.add_argument(
+        '-m', '--model', type=Path, default=ROOT / 'checkpoints' / '2stems' / 'model',
+        help='The path to the model to use.')
+    parser.add_argument(
+        '-o', '--output', type=Path, default=ROOT / 'output' / 'coreml',
+        help='The output directory to place the model in')
+    parser.add_argument(
+        '-l', '--length', type=float, default=5.0,
+        help='The input length in seconds for the converted Core ML model (which will only take fixed-length inputs). Default: 5 seconds')
 
     args = parser.parse_args()
 
@@ -37,7 +46,6 @@ def main():
 
     print('==> Tracing model')
     traced_model = torch.jit.trace(estimator.separator, stft_mag)
-    out = traced_model(stft_mag)
 
     print('==> Converting to Core ML')
     mlmodel = ct.convert(
@@ -48,12 +56,24 @@ def main():
         inputs=[ct.TensorType(shape=stft_mag.shape)]
     )
 
+    if not isinstance(mlmodel, MLModel):
+        raise ValueError("Invalid model type.")
+
+    spec = mlmodel.get_spec()
+
+    ct.utils.rename_feature(spec, "stft_mag_1", "magnitude")
+    ct.utils.rename_feature(spec, "var_614", "vocalsMask")
+    ct.utils.rename_feature(spec, "var_648", "instrumentsMask")
+
+    mlmodel = ct.models.MLModel(spec, weights_dir=mlmodel.weights_dir)
+
     output_dir: Path = args.output
     output_dir.mkdir(parents=True, exist_ok=True)
-    output = output_dir / f'Spleeter-{args.num_instruments}stems.mlpackage'
+    output = output_dir / f'SpleeterModel.mlpackage'
 
     print(f'==> Writing {output}')
-    mlmodel.save(output)
+    mlmodel.save(str(output))
+
 
 if __name__ == '__main__':
     main()
