@@ -21,12 +21,14 @@ ROOT = Path(__file__).resolve().parent
 def main():
     parser = argparse.ArgumentParser(
         description='Converts Spleeter (minus the STFT preprocessing) to Core ML')
-    parser.add_argument('-n', '--num-instruments', type=int, default=2, help='The number of stems.')
     parser.add_argument(
-        '-m', '--model', type=Path, default=ROOT / 'checkpoints' / '2stems' / 'model',
+        '-n', '--num-instruments', type=int, choices=[2, 4, 5], default=2,
+        help='The number of stems.')
+    parser.add_argument(
+        '-m', '--model', type=Path, default=None,
         help='The path to the model to use.')
     parser.add_argument(
-        '-o', '--output', type=Path, default=ROOT / 'output' / 'coreml',
+        '-o', '--output', type=Path, default=None,
         help='The output directory to place the model in')
     parser.add_argument(
         '-l', '--length', type=float, default=5.0,
@@ -34,8 +36,36 @@ def main():
 
     args = parser.parse_args()
 
+    if args.model is not None:
+        model = args.model
+    else:
+        model = ROOT / 'checkpoints' / f'{args.num_instruments}stems' / 'model'
+
+    if args.output is not None:
+        output_dir = args.output
+    else:
+        output_dir = ROOT / 'output' / f'{args.num_instruments}stems' / 'coreml'
+
     samplerate = 44100
-    estimator = Estimator(num_instruments=args.num_instruments, checkpoint_path=args.model)
+
+    if args.num_instruments == 2:
+        conv_activation = "LeakyReLU"
+        deconv_activation = "ReLU"
+        softmax = False
+    elif args.num_instruments == 4:
+        conv_activation = "ELU"
+        deconv_activation = "ELU"
+        softmax = False
+    elif args.num_instruments == 5:
+        conv_activation = "ELU"
+        deconv_activation = "ELU"
+        softmax = True
+    else:
+        raise ValueError(f"Unsupported number of instruments: {args.num_instruments}")
+
+    estimator = Estimator(
+        num_instruments=args.num_instruments, checkpoint_path=model,
+        conv_activation=conv_activation, deconv_activation=deconv_activation, softmax=softmax)
     estimator.eval()
 
     # Create sample 'audio' for tracing
@@ -62,12 +92,25 @@ def main():
     spec = mlmodel.get_spec()
 
     ct.utils.rename_feature(spec, "stft_mag_1", "magnitude")
-    ct.utils.rename_feature(spec, "var_614", "vocalsMask")
-    ct.utils.rename_feature(spec, "var_648", "instrumentsMask")
+    if args.num_instruments == 2:
+        ct.utils.rename_feature(spec, "var_614", "vocalsMask")
+        ct.utils.rename_feature(spec, "var_648", "accompanimentMask")
+    elif args.num_instruments == 4:
+        ct.utils.rename_feature(spec, "var_1156", "vocalsMask")
+        ct.utils.rename_feature(spec, "var_1190", "drumsMask")
+        ct.utils.rename_feature(spec, "var_1224", "bassMask")
+        ct.utils.rename_feature(spec, "var_1258", "otherMask")
+    elif args.num_instruments == 5:
+        ct.utils.rename_feature(spec, "var_1443", "vocalsMask")
+        ct.utils.rename_feature(spec, "var_1477", "pianoMask")
+        ct.utils.rename_feature(spec, "var_1511", "drumsMask")
+        ct.utils.rename_feature(spec, "var_1545", "bassMask")
+        ct.utils.rename_feature(spec, "var_1579", "otherMask")
+    else:
+        raise ValueError(f"Unsupported number of instruments: {args.num_instruments}")
 
     mlmodel = ct.models.MLModel(spec, weights_dir=mlmodel.weights_dir)
 
-    output_dir: Path = args.output
     output_dir.mkdir(parents=True, exist_ok=True)
     output = output_dir / f'SpleeterModel.mlpackage'
 

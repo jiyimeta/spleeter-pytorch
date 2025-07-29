@@ -9,6 +9,7 @@ from torch import nn
 from spleeter_pytorch.unet import UNet
 from spleeter_pytorch.util import tf2pytorch
 
+
 def load_ckpt(model, ckpt):
     state_dict = model.state_dict()
     for k, v in ckpt.items():
@@ -34,7 +35,7 @@ def pad_and_partition(tensor, T):
         tensor of size (B*[L/T] x C x F x T)
     """
     old_size = tensor.size(3)
-    new_size = math.ceil(old_size/T) * T
+    new_size = math.ceil(old_size / T) * T
     tensor = F.pad(tensor, [0, new_size - old_size])
     [b, c, t, f] = tensor.shape
     split = new_size // T
@@ -42,8 +43,12 @@ def pad_and_partition(tensor, T):
 
 
 class Separator(nn.Module):
-    def __init__(self, num_instruments: int, checkpoint_path: Path):
+    def __init__(
+            self, num_instruments: int, checkpoint_path: Path, conv_activation: str,
+            deconv_activation: str, softmax: bool):
         super().__init__()
+
+        self.softmax = softmax
 
         # stft config
         self.F = 1024
@@ -61,7 +66,7 @@ class Separator(nn.Module):
         self.instruments = nn.ModuleList()
         for i in range(num_instruments):
             print('Loading model for instrument {}'.format(i))
-            net = UNet(2)
+            net = UNet(2, conv_activation, deconv_activation, softmax)
             ckpt = ckpts[i]
             net = load_ckpt(net, ckpt)
             net.eval()  # change mode to eval
@@ -82,11 +87,24 @@ class Separator(nn.Module):
         stft_mag = pad_and_partition(stft_mag, self.T)  # B x 2 x F x T
         stft_mag = stft_mag.transpose(2, 3)  # B x 2 x T x F
 
-        # compute instruments' mask
-        masks = []
-        for net in self.instruments:
-            mask = net(stft_mag)
-            masks.append(mask)
+        if self.softmax:
+            logit_mask_list = []
+            for net in self.instruments:
+                logit_mask = net(stft_mag)
+                logit_mask_list.append(logit_mask)
+
+            softmax_masks = torch.softmax(torch.stack(logit_mask_list, dim=4), dim=4)
+
+            masks = []
+            for i in range(len(self.instruments)):
+                mask = softmax_masks[..., i] * stft_mag
+                masks.append(mask)
+        else:
+            masks = []
+            # compute instruments' mask
+            for net in self.instruments:
+                mask = net(stft_mag)
+                masks.append(mask)
 
         # compute denominator
         mask_sum = sum([m ** 2 for m in masks])
@@ -94,13 +112,13 @@ class Separator(nn.Module):
 
         normalized_masks = []
         for mask in masks:
-            mask = (mask ** 2 + 1e-10/2)/(mask_sum)
+            mask = (mask ** 2 + 1e-10 / 2) / (mask_sum)
             mask = mask.transpose(2, 3)  # B x 2 X F x T
 
             mask = torch.cat(
                 torch.split(mask, 1, dim=0), dim=3)
 
-            mask = mask.squeeze(0)[:,:,:L].unsqueeze(-1) # 2 x F x L x 1
+            mask = mask.squeeze(0)[:, :, :L].unsqueeze(-1)  # 2 x F x L x 1
             normalized_masks.append(mask)
 
         return normalized_masks

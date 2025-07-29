@@ -6,8 +6,10 @@ from torch import nn
 
 from spleeter_pytorch.separator import Separator
 
+
 class Estimator(nn.Module):
-    def __init__(self, num_instruments: int, checkpoint_path: Path):
+    def __init__(self, num_instruments: int, checkpoint_path: Path,
+                 conv_activation: str, deconv_activation: str, softmax: bool):
         super().__init__()
 
         # stft config
@@ -20,7 +22,9 @@ class Estimator(nn.Module):
             requires_grad=False
         )
 
-        self.separator = Separator(num_instruments=num_instruments, checkpoint_path=checkpoint_path)
+        self.separator = Separator(
+            num_instruments=num_instruments, checkpoint_path=checkpoint_path,
+            conv_activation=conv_activation, deconv_activation=deconv_activation, softmax=softmax)
 
     def compute_stft(self, wav):
         """
@@ -46,7 +50,7 @@ class Estimator(nn.Module):
         stft = F.pad(stft, (0, 0, 0, 0, 0, pad))
         stft = torch.view_as_complex(stft)
         wav = torch.istft(stft, self.win_length, hop_length=self.hop_length, center=True,
-                    window=self.win)
+                          window=self.win)
         return wav.detach()
 
     def forward(self, wav):
