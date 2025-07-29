@@ -17,7 +17,7 @@ to separate the example file. The output will be located in `output/stems`.
 
 This repository includes only the checkpoint file for 2-stem separation.
 The models for 4- and 5-stem separations are not contained because the sizes are large.
-Currently, you can obtain the checkpoint files by the following steps:
+Currently, you can obtain the checkpoint files via GitHub Releases or by the following steps:
 
 1. Clone the original [Spleeter](https://github.com/deezer/spleeter) repository.
 2. Execute separation by some commands like `poetry run spleeter separate -p spleeter:5stems -o output audio_example.mp3`.
