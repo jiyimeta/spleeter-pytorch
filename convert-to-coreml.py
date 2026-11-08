@@ -17,6 +17,13 @@ from spleeter_pytorch.estimator import Estimator
 
 ROOT = Path(__file__).resolve().parent
 
+# The output names, in the separator's stem order, that swift-spleeter reads.
+MASK_NAMES = {
+    2: ["vocalsMask", "accompanimentMask"],
+    4: ["vocalsMask", "drumsMask", "bassMask", "otherMask"],
+    5: ["vocalsMask", "pianoMask", "drumsMask", "bassMask", "otherMask"],
+}
+
 
 def main():
     parser = argparse.ArgumentParser(
@@ -33,6 +40,9 @@ def main():
     parser.add_argument(
         '-l', '--length', type=float, default=5.0,
         help='The input length in seconds for the converted Core ML model (which will only take fixed-length inputs). Default: 5 seconds')
+    parser.add_argument(
+        '-p', '--precision', choices=['float16', 'float32'], default='float16',
+        help='The compute precision. float16 (the default) runs on the Neural Engine; float32 does not.')
 
     args = parser.parse_args()
 
@@ -67,6 +77,9 @@ def main():
         num_instruments=args.num_instruments, checkpoint_path=model,
         conv_activation=conv_activation, deconv_activation=deconv_activation, softmax=softmax)
     estimator.eval()
+    # Export each stem's raw mask; the consumer turns them into ratio masks in FP32. Squaring inside the model
+    # overflows FP16 wherever a stem's mask exceeds 256 (loud bins such as a kick drum's), which zeroed those bins.
+    estimator.separator.ratio_masks = False
 
     # Create sample 'audio' for tracing
     wav = torch.zeros(2, int(args.length * samplerate))
@@ -81,6 +94,7 @@ def main():
     mlmodel = ct.convert(
         traced_model,
         convert_to='mlprogram',
+        compute_precision=ct.precision.FLOAT32 if args.precision == 'float32' else ct.precision.FLOAT16,
         # TODO: Investigate whether we'd want to make the input shape flexible
         # See https://coremltools.readme.io/docs/flexible-inputs
         inputs=[ct.TensorType(shape=stft_mag.shape)]
@@ -91,23 +105,13 @@ def main():
 
     spec = mlmodel.get_spec()
 
-    ct.utils.rename_feature(spec, "stft_mag_1", "magnitude")
-    if args.num_instruments == 2:
-        ct.utils.rename_feature(spec, "var_614", "vocalsMask")
-        ct.utils.rename_feature(spec, "var_648", "accompanimentMask")
-    elif args.num_instruments == 4:
-        ct.utils.rename_feature(spec, "var_1156", "vocalsMask")
-        ct.utils.rename_feature(spec, "var_1190", "drumsMask")
-        ct.utils.rename_feature(spec, "var_1224", "bassMask")
-        ct.utils.rename_feature(spec, "var_1258", "otherMask")
-    elif args.num_instruments == 5:
-        ct.utils.rename_feature(spec, "var_1443", "vocalsMask")
-        ct.utils.rename_feature(spec, "var_1477", "pianoMask")
-        ct.utils.rename_feature(spec, "var_1511", "drumsMask")
-        ct.utils.rename_feature(spec, "var_1545", "bassMask")
-        ct.utils.rename_feature(spec, "var_1579", "otherMask")
-    else:
-        raise ValueError(f"Unsupported number of instruments: {args.num_instruments}")
+    ct.utils.rename_feature(spec, spec.description.input[0].name, "magnitude")
+    # The outputs come in the separator's stem order; their generated names change with the graph.
+    output_names = [output.name for output in spec.description.output]
+    if len(output_names) != len(MASK_NAMES[args.num_instruments]):
+        raise ValueError(f"Expected {len(MASK_NAMES[args.num_instruments])} outputs, got {output_names}")
+    for old, new in zip(output_names, MASK_NAMES[args.num_instruments]):
+        ct.utils.rename_feature(spec, old, new)
 
     mlmodel = ct.models.MLModel(spec, weights_dir=mlmodel.weights_dir)
 

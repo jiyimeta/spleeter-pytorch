@@ -45,10 +45,17 @@ def pad_and_partition(tensor, T):
 class Separator(nn.Module):
     def __init__(
             self, num_instruments: int, checkpoint_path: Path, conv_activation: str,
-            deconv_activation: str, softmax: bool):
+            deconv_activation: str, softmax: bool, ratio_masks: bool = True):
+        """
+        Args:
+            ratio_masks (bool): Whether to return Spleeter's ratio masks (m_i^2 / sum m_j^2), or each stem's raw mask
+                (the magnitude it estimates for that stem) for the caller to turn into ratio masks. Exported models
+                use raw masks: squaring magnitudes above 256 overflows FP16, the precision Core ML runs a model in.
+        """
         super().__init__()
 
         self.softmax = softmax
+        self.ratio_masks = ratio_masks
 
         # stft config
         self.F = 1024
@@ -106,19 +113,20 @@ class Separator(nn.Module):
                 mask = net(stft_mag)
                 masks.append(mask)
 
-        # compute denominator
-        mask_sum = sum([m ** 2 for m in masks])
-        mask_sum += 1e-10
+        if self.ratio_masks:
+            # compute denominator
+            mask_sum = sum([m ** 2 for m in masks])
+            mask_sum += 1e-10
+            masks = [(mask ** 2 + 1e-10 / 2) / (mask_sum) for mask in masks]
 
-        normalized_masks = []
+        output_masks = []
         for mask in masks:
-            mask = (mask ** 2 + 1e-10 / 2) / (mask_sum)
             mask = mask.transpose(2, 3)  # B x 2 X F x T
 
             mask = torch.cat(
                 torch.split(mask, 1, dim=0), dim=3)
 
             mask = mask.squeeze(0)[:, :, :L].unsqueeze(-1)  # 2 x F x L x 1
-            normalized_masks.append(mask)
+            output_masks.append(mask)
 
-        return normalized_masks
+        return output_masks

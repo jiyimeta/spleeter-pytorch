@@ -39,6 +39,17 @@ The `.mlpackage` and `.mlmodelc` will be located under `output/{n}stems/coreml` 
 
 > Note: The converted model corresponds to the [`Separator`](spleeter_pytorch/separator.py) module and still requires the consumer of the model to manually perform the STFT conversion as performed in the [`Estimator`](spleeter_pytorch/estimator.py). This is due to Core ML [not supporting FFT operations yet](https://github.com/apple/coremltools/issues/1311).
 
+The converted model outputs each stem's raw mask (`ratio_masks=False`), not Spleeter's ratio masks: the consumer
+computes `m_i^2 / sum m_j^2` itself, in FP32. Squaring inside the model overflows FP16 — Core ML's default precision —
+wherever a mask exceeds 256, which zeroed loud bins such as a kick drum's.
+
+The 2- and 4-stem models stay close to the FP32 separator in FP16. Convert the 5-stem model with `-p float32`: its FP16
+output drifts from the FP32 separator by about 20 dB SNR on the piano stem.
+
+```sh
+python convert-to-coreml.py -n 5 -p float32
+```
+
 ## Note
 
 - Currently this is only tested with the 2stems model. Feel free to [get one of the other models](https://github.com/deezer/spleeter/releases/tag/v1.4.0) and test it on them.
