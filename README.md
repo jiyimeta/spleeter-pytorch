@@ -50,6 +50,24 @@ output drifts from the FP32 separator by about 20 dB SNR on the piano stem.
 python convert-to-coreml.py -n 5 -p float32
 ```
 
+## Export to ONNX
+
+The same separator exports to ONNX (FP32, opset 17) for ONNX Runtime, which swift-spleeter's `SpleeterONNX` backend
+runs on Android:
+
+```sh
+# Writes output/4stems/onnx/Spleeter4Model.onnx (about 157 MB) and compares it with PyTorch in onnxruntime
+python convert-to-onnx.py -n 4 --check
+```
+
+The outputs are the raw masks under the Core ML models' names (`vocalsMask`, `drumsMask`, …), shaped
+`2 × 1024 × frames × 1`, from a `magnitude` input shaped `2 × 1024 × frames`. The frame count is fixed — the separator
+partitions its input with Python arithmetic on the traced shape, which the export bakes in — and defaults to 512, the
+separator's own partition size: a shorter input is padded to 512 frames inside the graph anyway, so a 512-frame model
+separates about 11.9 s per call for the cost of a 216-frame (5 s) one. `-f 216` exports the Core ML models' window.
+
+Exporting needs `onnx` (and `onnxruntime` for `--check`) besides this package's dependencies.
+
 ## Note
 
 - Currently this is only tested with the 2stems model. Feel free to [get one of the other models](https://github.com/deezer/spleeter/releases/tag/v1.4.0) and test it on them.
