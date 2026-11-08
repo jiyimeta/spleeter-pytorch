@@ -66,6 +66,12 @@ partitions its input with Python arithmetic on the traced shape, which the expor
 separator's own partition size: a shorter input is padded to 512 frames inside the graph anyway, so a 512-frame model
 separates about 11.9 s per call for the cost of a 216-frame (5 s) one. `-f 216` exports the Core ML models' window.
 
+`-w float16` stores the weights as FP16, each cast back to FP32 inside the graph (ONNX Runtime folds the casts at
+load, so inference stays FP32): the 4-stem model drops to about 79 MB, and its stems stay within about 60 dB SNR of the
+FP32 model's.
+
+`convert-to-coreml.py -f 512` likewise converts a Core ML model for 512-frame windows.
+
 Exporting needs `onnx` (and `onnxruntime` for `--check`) besides this package's dependencies.
 
 ## Note

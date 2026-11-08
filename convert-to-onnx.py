@@ -37,6 +37,37 @@ class TupleSeparator(torch.nn.Module):
         return tuple(self.separator(magnitude))
 
 
+def store_weights_as_float16(path):
+    """Rewrites the model at `path` with its float weights stored as float16, each followed by a Cast to float32."""
+    import numpy as np
+    import onnx
+    from onnx import TensorProto, helper, numpy_helper
+
+    model = onnx.load(str(path))
+    graph = model.graph
+    casts = []
+    initializers = []
+    for initializer in graph.initializer:
+        weights = numpy_helper.to_array(initializer)
+        # Scalars and tiny shape helpers stay as they are.
+        if initializer.data_type != TensorProto.FLOAT or weights.size < 16:
+            initializers.append(numpy_helper.from_array(weights, initializer.name))
+            continue
+        stored = numpy_helper.from_array(weights.astype(np.float16), initializer.name + '_float16')
+        initializers.append(stored)
+        casts.append(helper.make_node(
+            'Cast', [stored.name], [initializer.name], to=TensorProto.FLOAT, name=initializer.name + '_cast'))
+    del graph.initializer[:]
+    graph.initializer.extend(initializers)
+    # The casts come first, so the graph stays topologically sorted.
+    nodes = casts + list(graph.node)
+    del graph.node[:]
+    graph.node.extend(nodes)
+    onnx.checker.check_model(model)
+    onnx.save(model, str(path))
+    print(f'    stored {len(casts)} weight tensors as float16')
+
+
 def main():
     parser = argparse.ArgumentParser(
         description='Exports Spleeter (minus the STFT preprocessing) to ONNX')
@@ -55,6 +86,10 @@ def main():
              'shorter input is padded to inside the graph anyway; 216 matches the Core ML models\' 5 s window.')
     parser.add_argument(
         '--opset', type=int, default=17, help='The ONNX opset. Default: 17')
+    parser.add_argument(
+        '-w', '--weights', choices=['float32', 'float16'], default='float32',
+        help='How the weights are stored. float16 halves the file; each weight is cast back to float32 inside the '
+             'graph, which ONNX Runtime folds once at load, so inference still runs in float32. Default: float32')
     parser.add_argument(
         '--check', action='store_true',
         help='Run the exported model in onnxruntime on random magnitudes and compare it with PyTorch.')
@@ -83,6 +118,8 @@ def main():
             TupleSeparator(estimator.separator).eval(), (magnitude,), str(output),
             input_names=['magnitude'], output_names=MASK_NAMES[n], opset_version=args.opset,
             do_constant_folding=True)
+    if args.weights == 'float16':
+        store_weights_as_float16(output)
     print(f'    {output.stat().st_size / 1e6:.1f} MB')
 
     if args.check:

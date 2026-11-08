@@ -41,6 +41,10 @@ def main():
         '-l', '--length', type=float, default=5.0,
         help='The input length in seconds for the converted Core ML model (which will only take fixed-length inputs). Default: 5 seconds')
     parser.add_argument(
+        '-f', '--frames', type=int, default=None,
+        help='The STFT frames the model takes, instead of --length: 512 is the separator\'s own partition size '
+             '(1024 x 511 samples, about 11.9 s). Default: whatever --length gives (216 for 5 s).')
+    parser.add_argument(
         '-p', '--precision', choices=['float16', 'float32'], default='float16',
         help='The compute precision. float16 (the default) runs on the Neural Engine; float32 does not.')
 
@@ -82,7 +86,9 @@ def main():
     estimator.separator.ratio_masks = False
 
     # Create sample 'audio' for tracing
-    wav = torch.zeros(2, int(args.length * samplerate))
+    # `frames` centered STFT frames come from hop × (frames − 1) samples.
+    samples = estimator.hop_length * (args.frames - 1) if args.frames else int(args.length * samplerate)
+    wav = torch.zeros(2, samples)
 
     # Reproduce the STFT step (which we cannot convert to Core ML, unfortunately)
     _, stft_mag = estimator.compute_stft(wav)
